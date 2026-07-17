@@ -1,0 +1,19 @@
+{
+  "index_patterns": [
+    "logs-endpoint-*"
+  ],
+  "priority": 300,
+  "composed_of": [
+    "helk-logs-all-default",
+    "helk-logs-all-other_ecs_fields",
+    "helk-logs-all",
+    "helk-logs-not-ip",
+    "helk-logs-network-fields",
+    "helk-logs-ips",
+    "helk-logs-all-dynamic_templates",
+    "helk-logs-any-fields",
+    "helk-logs-meta-enrichment-for-endpoints",
+    "helk-logs-fingerprints-for-endpoints"
+  ],
+  "template": {}
+}

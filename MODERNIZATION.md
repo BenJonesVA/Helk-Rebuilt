@@ -296,25 +296,51 @@ way worth calling out explicitly rather than discovering later.
 
 ---
 
-## 6. Proposed phased sequencing (not started)
+## 6. Proposed phased sequencing
 
-Each phase would end with an actual `docker compose up` boot test on the
-local Docker Desktop (confirmed available: Docker Desktop 4.82, Compose
-v5.3, WSL2 backend).
+Each phase ends with an actual `docker compose up` boot test on the local
+Docker Desktop (confirmed available: Docker Desktop 4.82, Compose v5.3,
+WSL2 backend).
 
-- **Phase 0** — hygiene: strip the committed htpasswd credential (generate
-  only at deploy time going forward), fix the fatal stale zen-discovery
-  setting.
-- **Phase 1** — core bootable slice: Elasticsearch + Kibana + Logstash +
-  Kafka (KRaft) + Nginx (TLS-only), all built from local Dockerfiles at the
-  target versions above, on one consolidated `compose.yaml`.
+- **Phase 0 — done.** Removed the committed htpasswd credential (`docker/.gitignore`
+  now excludes it; generated at deploy time), removed the fatal stale
+  `discovery.zen.minimum_master_nodes` setting from `elasticsearch.yml`.
+- **Phase 1 — done.** Elasticsearch 9.4.3 + Kibana 9.4.3 + Logstash 9.4.3 +
+  Kafka 4.3.1 (single-node KRaft) + Nginx (nginx:1.30-alpine, TLS-only, cert
+  persisted in a volume), all built from local Dockerfiles, consolidated into
+  one `docker/compose.yaml` (no `version:` key; the four old near-duplicate
+  `helk-kibana-*.yml` files are deleted). Verified with a clean `docker compose
+  down -v && docker compose up -d --build`: all services report healthy,
+  Nginx→Kibana HTTPS proxy returns Kibana's redirect, all 5 Kafka topics exist,
+  Logstash's main and mordor pipelines run with no errors. Zookeeper and the
+  `phusion/baseimage`-based Kafka base are deleted entirely.
+  - Along the way, found and fixed a real incompatibility beyond the original
+    scope: HELK's legacy `_template` index templates for `logs-*` collided with
+    Elastic's built-in reserved `logs-*-*` data-stream templates on 9.x.
+    Converted ~22 of them into composable component templates + a
+    priority-layered set of index templates (see
+    `docker/helk-logstash/scripts/convert_templates.py` and
+    `generate_index_templates.py`), verified empirically to still produce
+    regular (non-data-stream) indices with HELK's original field-type mappings
+    intact.
+  - Confirmed deviation: ES runs with `xpack.security.enabled=true` but
+    `xpack.security.http.ssl.enabled=false` / `transport.ssl.enabled=false` —
+    auth is on, but TLS is terminated only at the Nginx edge, not between
+    containers on the internal `helk` network. The doc's original "adopt
+    native security auto-configuration" framing implied inter-node TLS too;
+    user confirmed (2026-07-17) this simplification is intentional for a
+    single-node internal-only deployment and should stay as-is.
 - **Phase 2** — alerting: ElastAlert2 + new Sigma tooling, as the `alert`
-  Compose profile.
+  Compose profile. Not started.
 - **Phase 3** — analytics: Spark 3.5.8/GraphFrames 0.12.1 + rebuilt Jupyter
   image, as the `notebook` Compose profile; verification pass scoped per
-  the decision in §4.2.
+  the decision in §4.2. Not started.
 - **Phase 4** — lifecycle scripts: modernize for Compose v2, fix the
   destructive `git clean -d -fx` in `helk_update.sh`, fix the fragile
-  relative-path git-ref read, scoped per the decision in §4.4.
+  relative-path git-ref read, scoped per the decision in §4.4. Not started —
+  `helk_install.sh`/`helk_update.sh`/`helk_remove_containers.sh` still
+  reference the deleted legacy compose files and Zookeeper/`ADVERTISED_LISTENER`
+  assumptions from the pre-Phase-1 design.
 
-No implementation has started. This document reflects research only.
+All four open decisions in §5 remain unresolved and were deliberately not
+touched during Phase 0/1.

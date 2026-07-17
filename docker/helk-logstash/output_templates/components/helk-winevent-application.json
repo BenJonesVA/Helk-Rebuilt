@@ -1,0 +1,12 @@
+{
+  "template": {
+    "mappings": {
+      "properties": {
+        "spp_restart_scheduled": {
+          "type": "date"
+        }
+      }
+    }
+  },
+  "version": 2018080101
+}

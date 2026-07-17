@@ -3,6 +3,7 @@
 [![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](https://www.gnu.org/licenses/gpl-3.0)
 [![stability-wip](https://img.shields.io/badge/stability-work--in--progress-orange.svg)](https://github.com/mkenney/software-guides/blob/master/STABILITY-BADGES.md#work-in-progress)
 [![Fork of HELK](https://img.shields.io/badge/fork%20of-Cyb3rWard0g%2FHELK-blueviolet.svg)](https://github.com/Cyb3rWard0g/HELK)
+[![Progress](https://img.shields.io/badge/progress-~40%25%20(Phase%201%20of%204)-yellow.svg)](#status-work-in-progress-~40-complete)
 
 **HELK Rebuilt** is a from-scratch modernization of **HELK (The Hunting
 ELK)** — one of the first open source hunt platforms to combine SQL
@@ -20,14 +21,35 @@ ECS/OSSEM/ATT&CK-enriched detection content, and Spark/GraphFrames-based
 graph hunting in Jupyter — and rebuilds the infrastructure underneath it on
 currently maintained software.
 
-## Status: Work In Progress (0% complete)
+## Status: Work In Progress (~40% complete)
 
-🚧 **This project is a work in progress. Implementation is currently at 0%
-complete.** No modernized code has shipped yet. We're currently in the
-research/design phase: the full current-state inventory, target-version
-decisions, open questions, and phased implementation plan live in
-**[MODERNIZATION.md](MODERNIZATION.md)**. Start there if you want the
-detailed technical picture of what's changing and why.
+🚧 **This project is a work in progress.** The core stack now boots clean on
+currently maintained software; alerting, analytics, and lifecycle-script
+modernization are not started. Full technical detail — inventory, version
+decisions, open questions — lives in **[MODERNIZATION.md](MODERNIZATION.md)**.
+
+Progress by phase (percentage is phase count, not effort-weighted — Phase 1
+was the largest single chunk of work):
+
+| Phase | Scope | Status |
+|---|---|---|
+| 0 — Hygiene | Strip committed htpasswd credential, fix fatal stale ES discovery setting | ✅ Done |
+| 1 — Core bootable stack | Elasticsearch 9.4.3, Kibana 9.4.3, Logstash 9.4.3, Kafka 4.3.1 (KRaft, no Zookeeper), Nginx (TLS), consolidated into one `compose.yaml`. Verified with a clean `docker compose down -v && up --build`: all services healthy, Kibana reachable through Nginx over HTTPS, all 5 Kafka topics created, Logstash's pipelines run error-free. Along the way, converted ~22 of HELK's legacy Elasticsearch index templates to composable templates after finding they collided with Elastic's built-in `logs-*-*` reserved template namespace on 9.x. | ✅ Done |
+| 2 — Alerting | ElastAlert2 + `sigma-cli`/`pySigma` replacing the dead Sigma fork | ⬜ Not started |
+| 3 — Analytics | Spark 3.5.8 + GraphFrames 0.12.1 + rebuilt Jupyter image | ⬜ Not started |
+| 4 — Lifecycle scripts | Modernize `helk_install.sh`/`helk_update.sh`/`helk_remove_containers.sh` for Compose v2, fix the destructive `git clean -d -fx`, fix fragile relative-path git-ref read | ⬜ Not started |
+
+Confirmed design choice from Phase 1: Elasticsearch runs with authentication
+on but TLS disabled between containers on the internal Docker network (TLS
+is terminated only at the Nginx edge). This deviates from
+MODERNIZATION.md's original recommendation but was confirmed as intentional
+for this single-node, internal-only deployment — see
+[MODERNIZATION.md §6](MODERNIZATION.md#6-proposed-phased-sequencing).
+
+Four scope decisions in [MODERNIZATION.md §5](MODERNIZATION.md#5-open-decisions-not-yet-resolved)
+remain unresolved and gate Phases 2–4: Jupyter path auth, how deep to verify
+the 378 Sigma-derived notebooks, whether to carry forward Kibana's ~85 legacy
+saved objects, and how far to modernize the install/lifecycle scripts.
 
 ## Goals
 

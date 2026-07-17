@@ -1,0 +1,4 @@
+# Generated at deploy time — never commit real credentials
+docker/helk-nginx/htpasswd.users
+docker/helk-nginx/htpasswd.users_backup
+docker/.env

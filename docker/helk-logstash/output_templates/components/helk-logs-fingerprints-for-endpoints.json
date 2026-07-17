@@ -1,0 +1,12 @@
+{
+  "template": {
+    "mappings": {
+      "properties": {
+        "fingerprint_process_command_line_mm3": {
+          "type": "keyword"
+        }
+      }
+    }
+  },
+  "version": 2019021801
+}

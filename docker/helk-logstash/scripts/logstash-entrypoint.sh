@@ -72,14 +72,41 @@ while true
 done
 
 # ********** Uploading templates to Elasticsearch *******
-echo -e "${HELK_INFO_TAG} Uploading templates for field & value mappings and index settings to elasticsearch .."
+# Retries are bounded so one bad template surfaces loudly instead of wedging startup forever.
+upload_with_retry() {
+  local method="$1" url="$2" file="$3" label="$4"
+  local attempt=0
+  until [[ "$(curl -s -o /dev/null -w '%{http_code}' -X "$method" "$url" -d@"$file" -H 'Content-Type: application/json')" == "200" ]]; do
+    attempt=$((attempt + 1))
+    if [[ "$attempt" -ge 30 ]]; then
+      echo -e "${HELK_ERROR_TAG} Giving up uploading $label after $attempt attempts.."
+      return 1
+    fi
+    echo -e "${HELK_WARNING_TAG} Retrying uploading $label"
+    sleep 2
+  done
+}
+
+echo -e "${HELK_INFO_TAG} Uploading legacy templates (HELK-private index patterns only) to elasticsearch .."
 for file in "${DIR}"/*.json; do
     template_name=$(echo "$file" | sed -r ' s/^.*\/[0-9]+\-//' | sed -r ' s/\.json$//')
     echo -e "${HELK_INFO_TAG} Uploading $template_name template to elasticsearch.."
-    until [[ "$(curl -s -o /dev/null -w '%{http_code}' -X POST ${ELASTICSEARCH_ACCESS}/_template/"$template_name" -d@"${file}" -H 'Content-Type: application/json')" == "200" ]]; do
-      echo -e "${HELK_WARNING_TAG} Retrying uploading $template_name"
-      sleep 2
-    done
+    upload_with_retry POST "${ELASTICSEARCH_ACCESS}/_template/${template_name}" "$file" "$template_name"
+done
+
+# component templates first (composable index templates below reference them via composed_of)
+echo -e "${HELK_INFO_TAG} Uploading component templates to elasticsearch .."
+for file in "${DIR}"/components/*.json; do
+    component_name=$(basename "$file" .json)
+    echo -e "${HELK_INFO_TAG} Uploading $component_name component template to elasticsearch.."
+    upload_with_retry PUT "${ELASTICSEARCH_ACCESS}/_component_template/${component_name}" "$file" "$component_name"
+done
+
+echo -e "${HELK_INFO_TAG} Uploading composable index templates to elasticsearch .."
+for file in "${DIR}"/index_templates/*.json; do
+    index_template_name=$(basename "$file" .json)
+    echo -e "${HELK_INFO_TAG} Uploading $index_template_name index template to elasticsearch.."
+    upload_with_retry PUT "${ELASTICSEARCH_ACCESS}/_index_template/${index_template_name}" "$file" "$index_template_name"
 done
 
 # ******** Cluster Settings ***************
@@ -103,48 +130,8 @@ until [[ "$(curl -s -o /dev/null -w '%{http_code}' -X POST ${ELASTICSEARCH_ACCES
   sleep 2
 done
 
-# ********** Install Plugins *****************
-echo -e "${HELK_INFO_TAG} Checking Logstash plugins.."
-# check if has been 30 days since plugins have been updated
-if test -f "$plugins_time_file"; then
-  plugins_last_time=$(date -d "$(<"$plugins_time_file")" '+%s')
-  plugins_current_time=$(date -d "$(<"$plugins_time_file")" '+%s')
-  plugins_day_diff=$(( ( plugins_current_time - plugins_last_time )/(60*60*24) ))
-  if [[ "$plugins_day_diff" -ge 30 ]]; then
-    plugins_oudated="yes"
-    echo -e "${HELK_INFO_TAG} Plugins have not been updated in over 30 days.."
-  else
-    plugins_oudated="no"
-  fi
-else
-  plugins_oudated="yes"
-fi
-# Test a few plugins determine if probably all already installed
-if ( logstash-plugin list  2> /dev/null | grep 'logstash-filter-prune' ) && ( logstash-plugin list  2> /dev/null | grep 'logstash-input-wmi' ); then
-  plugins_previous_install="yes"
-  echo -e "${HELK_INFO_TAG} Plugins from previous install detected.."
-else
-  plugins_previous_install="no"
-  echo -e "${HELK_INFO_TAG} Plugins from previous install not detected.."
-  echo -e "${HELK_INFO_TAG} Updating Logstash plugins over the internet for first run.."
-  logstash-plugin update
-fi
-# If have not been updated in X time or not installed at all.. then install them
-if [[ ${plugins_previous_install} = "no" ]] || [[ ${plugins_oudated} = "yes" ]]; then
-	if [[ -f "/usr/share/logstash/plugins/helk-offline-logstash-codec_and_filter_plugins.zip" ]] && [[  -f "/usr/share/logstash/plugins/helk-offline-logstash-input-plugins.zip" ]] && [[  -f "/usr/share/logstash/plugins/helk-offline-logstash-output-plugins.zip" ]]; then
-    echo -e "${HELK_INFO_TAG} Installing Logstash plugins via offline package.."
-	  logstash-plugin install file:///usr/share/logstash/plugins/helk-offline-logstash-codec_and_filter_plugins.zip
-	  logstash-plugin install file:///usr/share/logstash/plugins/helk-offline-logstash-input-plugins.zip
-	  logstash-plugin install file:///usr/share/logstash/plugins/helk-offline-logstash-output-plugins.zip
-  else
-    echo -e "${HELK_ERROR_TAG} Logstash plugins not detected.."
-    echo -e "${HELK_INFO_TAG} Please open a github ticket"
-    exit 1
-  fi
-  printf "%s" "$(date +"%Y-%m-%d %T")" > "$plugins_time_file"
-else
-  echo -e "${HELK_INFO_TAG} Logstash plugins already installed and up to date.."
-fi
+# Plugins (logstash-codec-cef, logstash-codec-netflow) are installed at image build time
+# by the Dockerfile — nothing to install here at container start.
 
 # ********* Setting LS_JAVA_OPTS ***************
 if [[ -z "$LS_JAVA_OPTS" ]]; then

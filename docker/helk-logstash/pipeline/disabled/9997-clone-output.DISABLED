@@ -5,7 +5,7 @@ output {
       index => "original-logs-clone-%{+YYYY.ww}"
       #document_id => "%{[@metadata][clone][log_hash]}"
       user => 'elastic'
-      #password => 'elasticpassword'
+      password => '${ELASTIC_PASSWORD}'
     }
   }
 }

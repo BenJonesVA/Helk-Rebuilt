@@ -1,0 +1,15 @@
+{
+  "template": {
+    "mappings": {
+      "properties": {
+        "fingerprint_powershell_param_value_mm3": {
+          "type": "keyword"
+        },
+        "fingerprint_powershell_scriptblock_text_sha1": {
+          "type": "keyword"
+        }
+      }
+    }
+  },
+  "version": 2019021801
+}
