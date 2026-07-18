@@ -195,9 +195,10 @@ Researched against current (mid-2026) sources; see citations inline.
 | Kafka topic creation | `kafka-create-topics.sh`: replace `--zookeeper helk-zookeeper:2181` with `--bootstrap-server helk-kafka-broker:9092` for all 5 topics; drop `ZOOKEEPER_NAME` plumbing | High |
 | Zookeeper | Delete `docker/helk-zookeeper/` and its compose service entirely — nothing else in the stack talks to it directly | High |
 | ksqlDB | Pin `confluentinc/ksqldb-server:0.29.0` / `ksqldb-cli:0.29.0` explicitly (no more `:latest`); demote to optional/legacy, not load-bearing. Longer-term replacement candidate for the Sysmon-join logic: Kafka Streams or Flink SQL (not part of this cutover) | Medium (image itself is stale/abandoned even if protocol-compatible) |
-| Spark | **3.5.8**, Scala 2.12 | High |
-| GraphFrames | `io.graphframes:graphframes-spark3_2.12:0.12.1` (Scala/Java side) + `graphframes-py==0.12.1` (Python side) — this exact pairing is the literal dependency declared in the published artifact's POM, not an inference | High |
-| Jupyter base image | Rebuild from `quay.io/jupyter/pyspark-notebook:spark-3.5.3` (Docker Hub `jupyter/pyspark-notebook` is no longer updated; the project moved to `quay.io/jupyter/*`); add GraphFrames jar + `graphframes-py` on top; use docker-stacks' documented `start-notebook.py`/`start.sh` instead of the vanished `jupyter-cmd.sh` | High |
+| Spark | **4.1.2**, Scala 2.13 (revised from this document's original 3.5.8/Scala 2.12 recommendation — by Phase 3 implementation time, `quay.io/jupyter/pyspark-notebook`'s newest published tag had moved to `spark-4.1.2` and Spark 3.5.x tags were no longer offered; re-verified live against Quay's tag API rather than carried forward from the original research pass) | High |
+| GraphFrames | `io.graphframes:graphframes-spark4_2.13:0.12.1` (core) + `io.graphframes:graphframes-graphx-spark4_2.13:0.12.1` (its one runtime dependency — graphframes.io's install docs call out both jars as required for offline/Docker installs, not just the core artifact) + `graphframes-py==0.12.1` (Python side) — re-verified against Maven Central/PyPI at Phase 3 implementation time; still version 0.12.1, just the Spark-4/Scala-2.13-targeted artifact instead of the Spark-3/Scala-2.12 one this document originally named | High |
+| Jupyter base image | Rebuild from `quay.io/jupyter/pyspark-notebook:spark-4.1.2` (Docker Hub `jupyter/pyspark-notebook` is no longer updated; the project moved to `quay.io/jupyter/*`); add the two GraphFrames jars + `graphframes-py` on top; use docker-stacks' documented `start-notebook.py` (via `before-notebook.d/` hooks for the Postgres/Hive-metastore bootstrap) instead of the vanished `jupyter-cmd.sh` | High |
+| Spark standalone cluster (master/worker) | Built from the *same* `quay.io/jupyter/pyspark-notebook:spark-4.1.2` tag as the Jupyter driver, not a separate generic Spark image — PySpark requires the driver and executors to run matching Python major.minor versions, and reusing one image tag guarantees that trivially instead of hand-pinning a matching Python build across two image families (the old design's approach: a hand-installed Miniconda `python=3.7.5` in `helk-spark-worker` to match the mystery `jupyter-hunter` base's Python) | High |
 | ElastAlert | Migrate to **ElastAlert2** (`jertel/elastalert2`, latest `2.30.0`), official Docker image. Note: ElastAlert2 still pins `elasticsearch==7.10.1` client-side but officially supports pointing that client at ES8/ES9 *clusters* — a deliberate, working choice, not the same kind of hack as the original `elasticsearch==7.0.0` pin | High |
 | Sigma tooling | Replace `sigmac` (now archived upstream, explicitly deprecated for new projects) + the dead `Cyb3rWard0g/sigma` fork with **`sigma-cli` + `pySigma-backend-elasticsearch`** (Lucene query-string backend), sourcing rules from mainline `SigmaHQ/sigma`. No dedicated ElastAlert backend exists — wrap generated Lucene query strings into ElastAlert2 `query_string` rule YAML, same shape as the old sigmac "es-qs" backend | High |
 | Compose structure | Consolidate the 4 near-duplicate YAML files into one `compose.yaml` using Compose **profiles** (`alert`, `notebook`) instead of copy-pasted files; drop the obsolete `version:` key | High |
@@ -264,24 +265,19 @@ way worth calling out explicitly rather than discovering later.
    re-validating against `pySigma-backend-elasticsearch`'s config format
    before assuming the extra rules actually route to the right indices.
 
-## 5. Open decisions (not yet resolved)
+## 5. Open decisions
 
-1. **Jupyter path auth.** Once htpasswd is dropped from the Kibana path in
-   favor of native ES/Kibana login, `/jupyter` has no equivalent gate other
-   than Jupyter's own token. Two options on the table:
-   - Generate a separate htpasswd credential **at deploy time only** (never
-     committed) applied just to the `/jupyter` Nginx location block.
-   - Rely solely on Jupyter's built-in token auth (matches the original
-     repo's behavior for the notebook build variant), accepting the same
-     weaker posture it always had.
-2. **Notebook verification depth.** All 378 Sigma-derived notebooks plus the
-   GraphFrames tutorial notebook were written against ~2020-era GraphFrames
-   APIs (pre-0.11 connected-components refactor). Decision needed:
-   - Modernize the image and spot-check a representative sample plus the
-     GraphFrames tutorial notebook, flagging systematic breaks without fixing
-     all 378 individually, **or**
-   - A full pass fixing every one of the 378 notebooks — a materially larger
-     effort, arguably its own project.
+1. **Jupyter path auth — resolved 2026-07-17.** Rely solely on Jupyter's
+   built-in token auth (`JUPYTER_TOKEN` in `.env`), consistent with dropping
+   htpasswd from the Kibana path in Phase 1 and matching the original repo's
+   behavior for the notebook build variant. No separate htpasswd gate was
+   added for `/jupyter`.
+2. **Notebook verification depth — resolved 2026-07-17.** Spot-check: modernize
+   the image, run the GraphFrames tutorial notebook plus a representative
+   sample of the 378 Sigma-derived notebooks, and log systematic API breaks
+   without hand-fixing all 378 individually. User explicitly asked that what
+   a full fix pass would require be documented for later — see the Phase 3
+   entry in §6 for the spot-check findings and that follow-up scope.
 3. **Kibana saved objects.** Confirm whether the ~85 existing dashboards/
    visualizations are still wanted before investing in either the staged
    7.17→8.19→9.4 migration or selective Lens rebuilds — some may be stale
@@ -293,6 +289,10 @@ way worth calling out explicitly rather than discovering later.
    supporting bare-metal/VM Linux installs at all, or to focus modernization
    effort on the Compose files themselves and treat the shell scripts as
    secondary.
+
+Decisions #3 and #4 remain unresolved and gate Phase 4 only (lifecycle
+scripts) and any future Kibana-content work — neither gates anything already
+built in Phases 0-3.
 
 ---
 
@@ -388,15 +388,198 @@ WSL2 backend).
     test Sysmon document matching the curated `helk_sysmon_bits.yml` rule
     produced a real alert (`1 query hits, 1 matches, 1 alerts sent`) within
     one query cycle.
-- **Phase 3** — analytics: Spark 3.5.8/GraphFrames 0.12.1 + rebuilt Jupyter
-  image, as the `notebook` Compose profile; verification pass scoped per
-  the decision in §4.2. Not started.
+- **Phase 3 — done.** Spark 4.1.2 (Scala 2.13) standalone cluster
+  (`helk-spark-master`/`helk-spark-worker`) + a rebuilt `helk-jupyter` with
+  GraphFrames 0.12.1, gated behind the `notebook` Compose profile
+  (`docker compose --profile notebook up -d --build`).
+  - Version correction vs. this document's original §3 recommendation: Spark
+    3.5.8/Scala 2.12 was the right call when that research was done, but by
+    Phase 3 implementation time `quay.io/jupyter/pyspark-notebook`'s newest
+    tag had moved on to `spark-4.1.2` and no `spark-3.5.x` tag remained
+    published; GraphFrames 0.12.1 itself hadn't changed, but its
+    Spark-4/Scala-2.13 artifact (`graphframes-spark4_2.13`) is what's current
+    now, not the `graphframes-spark3_2.12` one originally named. Re-verified
+    live (Quay tag API, Maven Central, PyPI) rather than assumed from the
+    original pass — see §3's updated table rows.
+  - `helk-spark-master` and `helk-spark-worker` are built from the *same*
+    `quay.io/jupyter/pyspark-notebook:spark-4.1.2` image tag as the Jupyter
+    driver, not a generic Spark image. PySpark requires the driver and
+    executors to run matching Python major.minor versions; reusing one image
+    tag guarantees that without hand-pinning a Python build to track the
+    Jupyter image's conda Python across upgrades — this also let
+    `helk-spark-worker`'s old hand-installed Miniconda `python=3.7.5` (a
+    manual version-matching workaround for the same underlying problem) be
+    deleted entirely. `helk-spark-base` is deleted; both master and worker
+    keep the existing foreground `spark-class`-invoking entrypoint scripts
+    (Spark's own `sbin/start-master.sh`/`start-worker.sh` daemonize and
+    return, which would exit the container).
+  - GraphFrames needs two jars, not one — `graphframes-spark4_2.13` (core) +
+    `graphframes-graphx-spark4_2.13` (its one runtime dependency,
+    per graphframes.io's own install docs for offline/Docker installs) —
+    baked into `helk-jupyter`'s `$SPARK_HOME/jars` at build time and added to
+    a new `spark-defaults.conf`'s `spark.jars` so every notebook-created
+    SparkSession gets them automatically (matching the old, invisible
+    `jupyter-hunter` base image's behavior — none of the tutorial/Sigma
+    notebooks configure `spark.jars`/`--packages` themselves).
+  - Postgres-backed Hive metastore (§4 item 2) carried forward as required:
+    reimplemented as a docker-stacks `before-notebook.d/` startup hook
+    (`10-hive-metastore.sh`) rather than a custom `ENTRYPOINT` override, so
+    the base image's own tini/`start.sh` init path still runs. Fixed two
+    latent bugs found while porting it: the Postgres major version was
+    hardcoded to `10` (now detected dynamically, since the new base's Ubuntu
+    release ships a newer one) and `PGDATA` was hardcoded to
+    `/home/jupyter/...` (the new base's user is `jovyan`, not `jupyter`).
+    `PGDATA` is persisted in a named volume (`jupyter-hive-metastore`) so
+    table definitions survive container recreation, not just restarts.
+  - Jupyter path auth (§5 decision #1, resolved): Nginx gets a new
+    `/jupyter/` location proxying to `helk-jupyter:8888`, gated by Jupyter's
+    own `JUPYTER_TOKEN` (in `.env`) rather than a second htpasswd layer. Since
+    `helk-jupyter` only exists under the `notebook` profile, the proxy target
+    is resolved through a variable + Docker's embedded DNS (`resolver
+    127.0.0.11`) instead of a static `proxy_pass` hostname — a static
+    hostname would make Nginx fail to start whenever the profile is off and
+    the container doesn't exist. (Also caught during verification: Nginx
+    doesn't pick up a bind-mounted config edit without a reload — the first
+    test against a container that had been running since before this change
+    fell through to Kibana instead of Jupyter for exactly that reason.)
+  - Six real bugs found and fixed during boot testing (beyond the version
+    corrections above), each the kind that only surfaces by actually booting
+    the stack, not by reading the Dockerfiles:
+    1. `helk-spark-worker` couldn't create `$SPARK_HOME/work`
+       (`AccessDeniedException`) — the base image's `$SPARK_HOME` isn't
+       writable by the non-root `jovyan` user by default; fixed with an
+       explicit `chown` at build time.
+    2. Both `helk-spark-master`/`worker` inherited the base image's own
+       Jupyter-HTTP-endpoint healthcheck, which left them permanently
+       "unhealthy" despite running fine — neither service runs Jupyter, so
+       set `HEALTHCHECK NONE` on both.
+    3. `10-hive-metastore.sh`'s Postgres-bindir auto-detection used
+       `find -maxdepth 2`, one level too shallow for the real path
+       (`/usr/lib/postgresql/<ver>/bin/initdb` is 3 levels down) — silently
+       resolved to `.`, and combined with the script using `set -e` while
+       being *sourced* (not executed) by docker-stacks' `start.sh`, a failed
+       `pg_ctl` call there silently killed the entire container's startup.
+       Fixed the depth and dropped `set -e` from the sourced script.
+    4. The `PGDATA` existence check (`[ ! -d "$PGDATA" ]`) never triggered
+       `initdb`, because `PGDATA` is a mounted named volume — Docker always
+       creates the mountpoint directory even when empty. Fixed to check for
+       `PGDATA/PG_VERSION` (a file `initdb` actually creates) instead.
+    5. `initdb` then failed with "could not change permissions" because a
+       freshly created named volume inherits ownership from whatever
+       already exists at that path in the image, and nothing did yet; fixed
+       by pre-creating `${HOME}/srv/pgsql` with `jovyan` ownership in the
+       Dockerfile so the volume seeds correctly on first mount.
+    6. Postgres itself then failed with "could not create lock file
+       .../.s.PGSQL.5432.lock: Permission denied" — apt's `postgresql`
+       package owns `/var/run/postgresql` as the `postgres` system user, but
+       Postgres runs as `jovyan` here; fixed with a `chown` at build time
+       (this is the one piece of the original image's Dockerfile — `chown
+       ${USER} /run/postgresql` — that turned out to still be load-bearing).
+  - Notebook verification depth (§5 decision #2, resolved): spot-checked
+    rather than fixing all 378 Sigma-derived notebooks individually. Findings
+    below, in rough order of how systemic they are.
+  - **PySpark itself wasn't importable at all**, in any of `helk-jupyter`/
+    `helk-spark-master`/`helk-spark-worker` — despite the base image's name,
+    `quay.io/jupyter/pyspark-notebook` installs Spark's JVM side but neither
+    pip-installs a `pyspark` package nor puts `$SPARK_HOME/python` on
+    `PYTHONPATH`. Every notebook that does `from pyspark.sql import
+    SparkSession` (all 7 tutorials, an unknown fraction of the 378 Sigma
+    notebooks — see below) would have failed at the first cell. Fixed by
+    pointing `PYTHONPATH` at the bundled `$SPARK_HOME/python` (guarantees an
+    exact version match with the driver's own Spark install, unlike a second
+    `pip install pyspark`) on both the driver and the worker (executors spawn
+    a `python3 -m pyspark.worker` subprocess for Python tasks and need the
+    same fix).
+  - **The 378 Sigma-derived notebooks (`notebooks/sigma/`) don't use PySpark
+    at all** — they query Elasticsearch directly via the raw
+    `elasticsearch`/`elasticsearch_dsl` Python clients (confirmed by
+    inspecting a 6-notebook sample spanning the three largest prefixes: `win_`
+    216, `sysmon_` 51, `powershell_` 14). Neither package existed anywhere in
+    the image, so none of the 378 could import their own dependencies as
+    shipped — installed `elasticsearch==8.18.1`/`elasticsearch-dsl==8.18.0`
+    (the last release of `elasticsearch-dsl`, which pins `elasticsearch<9`;
+    running a Spark/ES client one major behind the 9.4.3 server is within
+    Elastic's documented compatibility window, not a mismatch). This is an
+    image-level fix (every one of the 378 needed it identically), distinct
+    from the per-notebook content fixes described next, which is why it was
+    done now rather than deferred.
+  - With that dependency gap closed, running the sampled notebook
+    (`win_account_discovery.ipynb`) end-to-end surfaces the same root cause
+    found in the demos/tutorials below: `Elasticsearch(['http://...'])` is
+    called with no credentials at all (not even the demos'/tutorials'
+    partial attempt), so every one of the 378 gets a hard
+    `AuthenticationException` (401) as soon as it queries. This is
+    mechanical and near-identical to fix across all 378 (add
+    `basic_auth=("elastic", os.environ["ELASTIC_PASSWORD"])` to each
+    `Elasticsearch(...)` constructor) — flagged as the highest-value,
+    lowest-risk item for a future full pass, but not applied here per the
+    "spot-check, don't fix all 378" scope decision.
+  - **GraphFrames 0.12.1 itself is confirmed working end-to-end on Spark
+    4.1.2**, distributed across the real `helk-spark-master`/`worker`
+    cluster (not local mode): the tutorial notebook's synthetic-data smoke
+    test (`GraphFrame(v, e)`, `.inDegrees`, edge filtering/counting) executed
+    cleanly with correct output. This was the actual thing Phase 3 needed to
+    prove and it holds — the two-jar install (§3) and the driver/executor
+    Python-parity approach are both validated by this, not just by
+    "the jar loads."
+  - **The Elasticsearch-Spark connector (`elasticsearch-spark-30_2.13:9.0.3`)
+    also confirmed working against Spark 4.1.2 and ES 9.4.3** once given
+    credentials (`es.net.http.auth.pass`) — resolving the risk flagged
+    earlier in this phase (Elastic has never published a Spark-4-targeted
+    build; empirically this one still works over the DataSource V1 path this
+    notebook uses).
+  - Fixed the 3 demo notebooks (`notebooks/demos/`) and the 3
+    Elasticsearch-reading tutorials (`05`/`06`/`07`) the same way: added
+    `.option("es.net.http.auth.pass", os.environ["ELASTIC_PASSWORD"])` (they
+    had `es.net.http.auth.user` but no password at all — harmless when the
+    old stack ran with security disabled, a hard authentication failure now
+    that Phase 1 turned ES auth on). The pandas demo's `from pandas.io.json
+    import json_normalize` was fixed to `pd.json_normalize` (removed in
+    pandas 2.0, a hard `ImportError`, not a soft deprecation). Small enough
+    numbers (6 notebooks total) to fix directly rather than just flag.
+  - **Genuine content bug found, not fixed**: the GraphFrames tutorial
+    references a `process_parent_name` field that Logstash's own pipeline
+    has never produced (confirmed via `helk-logstash/pipeline/*.conf` — the
+    real field is `process_parent_name`'s apparent replacement,
+    `process_parent_path`). This is a real stale-notebook bug, distinct from
+    the next point.
+  - **Verification limit, not a bug**: the same notebook's later cells
+    (motifs over real Sysmon data) also failed to resolve `process_parent_guid`
+    — but that field name *is* correct and current per the Logstash pipeline
+    (`ParentProcessGuid` → `process_parent_guid`). The failure there is
+    because this dev deployment's `logs-endpoint-winevent-sysmon-*` index
+    has exactly one document (the synthetic alert-test doc seeded during
+    Phase 2 verification, not a realistic Sysmon event) and
+    `logs-endpoint-winevent-security-*` has zero — Spark's schema inference
+    over a near-empty index can't resolve fields it never sees. Meaningfully
+    verifying notebook behavior against real data requires actual
+    Winlogbeat-sourced Sysmon telemetry flowing through the pipeline, which
+    this local verification environment doesn't have. Flagging this
+    explicitly rather than either claiming full verification or spending
+    effort chasing a false "stale field name" lead.
+  - **Follow-up scope for a future full notebook-fix pass** (requested by the
+    user to be documented now rather than done as part of this phase): the
+    378 Sigma-derived notebooks were generated by the old, dead `sigmac`
+    tooling. A full pass would need to (1) add ES auth credentials to all 378
+    (mechanical, see above — the single highest-value item), (2) regenerate
+    or hand-port them from the current Sigma rule set/pySigma tooling rather
+    than patching stale generated files, since the underlying `sigmac` tool
+    is gone, (3) audit any GraphFrames algorithm usage against the 0.12.1 API
+    (connected-components changed its checkpoint-directory requirements and
+    return schema since the pre-0.11 API these were written against), and
+    (4) re-verify field-name references like `process_parent_name` above
+    against the current Logstash pipeline — which in turn needs real
+    Winlogbeat/Sysmon telemetry flowing through the stack to verify
+    meaningfully, not just synthetic test documents. This is a materially
+    larger effort than Phase 3 itself, consistent with §5's original framing
+    of it as "arguably its own project."
 - **Phase 4** — lifecycle scripts: modernize for Compose v2, fix the
   destructive `git clean -d -fx` in `helk_update.sh`, fix the fragile
-  relative-path git-ref read, scoped per the decision in §4.4. Not started —
+  relative-path git-ref read, scoped per the decision in §5.4. Not started —
   `helk_install.sh`/`helk_update.sh`/`helk_remove_containers.sh` still
   reference the deleted legacy compose files and Zookeeper/`ADVERTISED_LISTENER`
   assumptions from the pre-Phase-1 design.
 
-All four open decisions in §5 remain unresolved and were deliberately not
-touched during Phase 0/1/2 — none of them gate alerting, only Phases 3/4.
+§5 decisions #1 (Jupyter auth) and #2 (notebook verification depth) were
+resolved during Phase 3 (see above). Decisions #3 (Kibana saved objects) and
+#4 (lifecycle scripts) remain open and gate Phase 4 only.

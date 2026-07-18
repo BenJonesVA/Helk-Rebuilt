@@ -3,9 +3,9 @@ name: helk
 # Single consolidated compose file for the core stack (replaces the old four
 # near-duplicate helk-kibana-*.yml "build option" files). Compose `profiles`
 # make optional components opt-in: `alert` (Phase 2 — ElastAlert2 + Sigma-
-# derived detections, `docker compose --profile alert up -d --build`) is wired
-# up below. `notebook` (Phase 3 — Spark+Jupyter) is not added yet since that
-# service doesn't exist in this repo's current build.
+# derived detections) and `notebook` (Phase 3 — Spark standalone cluster +
+# Jupyter/GraphFrames) are both wired up below, each via
+# `docker compose --profile <name> up -d --build`.
 
 services:
   helk-elasticsearch:
@@ -261,6 +261,74 @@ services:
     networks:
       helk:
 
+  helk-spark-master:
+    build: ./helk-spark-master
+    image: helk-spark-master:4.1.2
+    container_name: helk-spark-master
+    profiles: ["notebook"]
+    logging:
+      driver: "json-file"
+      options:
+        max-file: "9"
+        max-size: "6m"
+    ports:
+      - "8080:8080"
+      - "7077:7077"
+    restart: always
+    networks:
+      helk:
+
+  helk-spark-worker:
+    build: ./helk-spark-worker
+    image: helk-spark-worker:4.1.2
+    container_name: helk-spark-worker
+    profiles: ["notebook"]
+    logging:
+      driver: "json-file"
+      options:
+        max-file: "9"
+        max-size: "6m"
+    environment:
+      - SPARK_MASTER=spark://helk-spark-master:7077
+      - SPARK_WORKER_MEMORY=${SPARK_WORKER_MEMORY}
+    ports:
+      - "8081:8081"
+    restart: always
+    depends_on:
+      helk-spark-master:
+        condition: service_started
+    networks:
+      helk:
+
+  helk-jupyter:
+    build: ./helk-jupyter
+    image: helk-jupyter:4.1.2
+    container_name: helk-jupyter
+    profiles: ["notebook"]
+    logging:
+      driver: "json-file"
+      options:
+        max-file: "9"
+        max-size: "6m"
+    volumes:
+      - jupyter-hive-metastore:/home/jovyan/srv/pgsql
+    environment:
+      - JUPYTER_TOKEN=${JUPYTER_TOKEN}
+      - HIVE_METASTORE_PASSWORD=${HIVE_METASTORE_PASSWORD}
+      - ELASTIC_PASSWORD=${ELASTIC_PASSWORD}
+    restart: always
+    depends_on:
+      helk-elasticsearch:
+        condition: service_healthy
+      helk-elasticsearch-setup:
+        condition: service_completed_successfully
+      helk-spark-master:
+        condition: service_started
+      helk-spark-worker:
+        condition: service_started
+    networks:
+      helk:
+
   helk-nginx:
     build: ./helk-nginx
     image: helk-nginx:1.30-alpine
@@ -298,4 +366,6 @@ volumes:
   nginx-private:
     driver: local
   elastalert-sigma-rules:
+    driver: local
+  jupyter-hive-metastore:
     driver: local
