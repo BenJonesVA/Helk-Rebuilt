@@ -118,8 +118,13 @@ cd "$SCRIPT_DIR"
 echo "$INFO Rebuilding and restarting HELK (profiles:${PROFILE_NAMES[*]:+ ${PROFILE_NAMES[*]}})..."
 docker compose "${PROFILES[@]}" up -d --build --remove-orphans
 
-echo "$INFO Waiting for Logstash to reconnect to Elasticsearch..."
-until docker logs helk-logstash 2>&1 | grep -q "Restored connection to ES instance"; do
+echo "$INFO Waiting for Logstash's pipelines to finish starting..."
+# See the matching comment in helk_install.sh: grepping stdout for "Restored
+# connection to ES instance" only fires on a reconnect after a failed
+# attempt, so it hangs forever whenever Elasticsearch is already up before
+# Logstash starts (confirmed live). Logstash's own monitoring API is a
+# reliable signal instead.
+until docker exec helk-logstash curl -s -o /dev/null http://localhost:9600; do
   sleep 5
 done
 

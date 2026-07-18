@@ -652,11 +652,38 @@ WSL2 backend).
     uncommitted changes on disk) and confirmed it correctly found the repo
     root, detected the dirty tree, printed the exact files involved, and
     exited without touching anything — the safety check the whole rewrite
-    was centered on. Did **not** run a live `helk_install.sh`/
-    `helk_remove_containers.sh` end-to-end boot, since that would just
-    re-exercise the same `docker compose up`/`down` paths already verified
-    directly in Phases 1-3; the wrapper logic itself (flag parsing, `.env`
-    handling, the git safety check) is what's new here and what got tested.
+    was centered on.
+  - **Live end-to-end verification, run after the above**: a full clean-slate
+    rebuild via the actual scripts —
+    `./helk_remove_containers.sh --profile alert --profile notebook --volumes -y`
+    followed by `./helk_install.sh --profile alert --profile notebook` — against
+    the real stack. This caught a real bug the static checks above couldn't:
+    **the Logstash boot-wait condition (inherited from the original,
+    pre-modernization script) hangs forever on a clean boot.** It grepped
+    Logstash's stdout for `"Restored connection to ES instance"`, but that
+    message only fires when Logstash *recovers* from a failed connection
+    attempt — on this run Elasticsearch was already healthy before Logstash
+    started, so it connected on the first try and that line never got
+    logged. Confirmed live: the container ran for 17+ minutes with its JVM
+    actively burning CPU (pipelines genuinely up, confirmed via
+    `curl localhost:9600/_node/stats/pipelines` showing `"status":"green"`
+    with the `mordor` pipeline running) while the install script sat in an
+    infinite `sleep 5` loop. Fixed in both `helk_install.sh` and
+    `helk_update.sh` by polling Logstash's own monitoring API
+    (`docker exec helk-logstash curl -s -o /dev/null http://localhost:9600`)
+    instead — that endpoint responds as soon as pipelines finish compiling,
+    independent of log level or connection-retry timing. Re-ran the full
+    rebuild after the fix: completed in under 2 minutes, all containers
+    healthy/up, one-shot setup jobs exited 0.
+    Then re-confirmed every Phase 3 notebook fix against the fresh boot:
+    PySpark imports on both `helk-jupyter` (driver) and `helk-spark-worker`
+    (executor) at version 4.1.2; the worker registers `ALIVE` with Spark
+    Master; GraphFrames' `inDegrees` computes correctly on the real
+    distributed cluster; the ES-Spark connector reads real data from
+    Elasticsearch with auth (61 rows from `.kibana_task_manager*`); the
+    Hive metastore's Postgres accepts connections and the `hive` user
+    exists; and Jupyter is reachable through Nginx with token auth (302
+    without a token, 200 with the correct one from `.env`).
   - `docs/installation.md` was rewritten to match: Docker+Compose v2 as a
     prerequisite instead of something the script installs, `.env`-based
     configuration, the `--profile` flag convention, and the actual

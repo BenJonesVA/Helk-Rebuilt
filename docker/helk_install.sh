@@ -101,8 +101,17 @@ fi
 echo "$INFO Building and starting HELK (profiles:${PROFILE_NAMES[*]:+ ${PROFILE_NAMES[*]}})..."
 docker compose "${PROFILES[@]}" up -d --build
 
-echo "$INFO Waiting for Logstash to connect to Elasticsearch..."
-until docker logs helk-logstash 2>&1 | grep -q "Restored connection to ES instance"; do
+echo "$INFO Waiting for Logstash's pipelines to finish starting..."
+# The original wait condition grepped Logstash's stdout for "Restored
+# connection to ES instance" - that message only fires when Logstash
+# recovers from a FAILED connection attempt. On a clean boot where
+# Elasticsearch is already up before Logstash starts, it connects on the
+# first try and that line never gets logged, hanging this loop forever
+# (confirmed live during Phase 4 verification). Logstash's own monitoring
+# API responds as soon as its pipelines have compiled and started,
+# regardless of log level or connection-retry timing - a reliable signal
+# instead of a message that may or may not appear.
+until docker exec helk-logstash curl -s -o /dev/null http://localhost:9600; do
   sleep 5
 done
 
