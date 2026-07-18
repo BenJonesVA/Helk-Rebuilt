@@ -1,20 +1,26 @@
-# HELK script: HELK Elastalert Dockerfile
+# HELK script: HELK ElastAlert2 config
 # HELK build Stage: Alpha
-# HELK ELK version: 6.3.2
 # Author: Roberto Rodriguez (@Cyb3rWard0g)
 # License: GPL-3.0
 
-# References: 
-# https://github.com/Yelp/elastalert/blob/master/Dockerfile-test
-# https://jordanpotti.com/2017/12/22/using-elastalert-to-help-automate-threat-hunting/
+# References:
+# https://elastalert2.readthedocs.io/en/latest/configuration.html
 
+# rules/curated holds the HELK-maintained rules baked into the image;
+# rules/sigma is a mounted volume populated by the helk-sigma-convert
+# one-shot container. scan_subdirectories defaults to true so both are picked
+# up under this single rules_folder.
 rules_folder: rules
 run_every:
     seconds: 60
 buffer_time:
     seconds: 900
-es_host: helk-elasticsearch
-es_port: 9200
+
+# Elasticsearch connection (host/port/username/password/TLS) is supplied via
+# the ES_HOST / ES_PORT / ES_USERNAME / ES_PASSWORD / ES_USE_SSL environment
+# variables set in compose - elastalert2 maps these to their config.yaml
+# equivalents automatically, so none of them are hardcoded here.
+
 alert_time_limit:
     days: 1
 writeback_index: elastalert_status

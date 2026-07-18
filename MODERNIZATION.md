@@ -330,8 +330,64 @@ WSL2 backend).
     native security auto-configuration" framing implied inter-node TLS too;
     user confirmed (2026-07-17) this simplification is intentional for a
     single-node internal-only deployment and should stay as-is.
-- **Phase 2** — alerting: ElastAlert2 + new Sigma tooling, as the `alert`
-  Compose profile. Not started.
+- **Phase 2 — done.** ElastAlert2 2.30.0 (pip-installed, `python:3.13-slim`
+  base, replacing the Yelp/elastalert git-clone build pinned to Python 3.6 and
+  `elasticsearch==7.0.0`) plus a new `sigma-cli`/`pySigma-backend-elasticsearch`
+  conversion pipeline, both gated behind the `alert` Compose profile
+  (`docker compose --profile alert up -d --build`).
+  - `helk-sigma-convert` is a new one-shot container: clones a pinned
+    SigmaHQ/sigma release tag (`SIGMA_RULES_REF` in `.env`, currently
+    `r2026-07-01`) at build time (no runtime git fetch), converts every rule
+    under `rules/windows/` to a Lucene query via a custom pySigma processing
+    pipeline, and writes one ElastAlert2 rule YAML per convertible Sigma rule
+    to a volume shared with `helk-elastalert`.
+  - The processing pipeline (`docker/helk-sigma-convert/pipeline/helk_ossem_pipeline.yml`)
+    was generated mechanically from the legacy `sigmac-config.yml` OSSEM field
+    mappings (`docker/helk-sigma-convert/scripts/generate_pipeline.py`, kept as
+    a dev-time tool, not run in the container). 131 fields ported as direct
+    1:1 renames; 20 EventID-conditional fields (e.g. `SubjectUserName`,
+    `PrivilegeList`) were collapsed to their dominant non-identity target value
+    rather than reproduced with full per-EventID fidelity — this is a
+    deliberate, logged scope reduction (see the generator's own docstring and
+    console output), not a silent gap. 5 fields with no safe majority mapping
+    are left unmapped.
+  - Logsource → HELK index routing (`docker/helk-sigma-convert/pipeline/logsource_index_map.yml`)
+    is keyed by Sigma's `service` field for native Windows Event Log channels
+    (security/system/application/powershell/wmi) and routes any
+    `category`-based rule (process_creation, registry_event, network_connection,
+    etc.) straight to the sysmon index, since every category-based rule in the
+    current SigmaHQ/sigma windows/ tree is Sysmon-sourced.
+  - Scope reduction vs. the original plan: the upstream Sigma repo no longer
+    has a top-level `apt` rule category (reorganized since the old sigmac
+    tooling was written) — only `rules/windows/` is converted. Non-Windows
+    logsources and rules pySigma can't convert (e.g. one rule using a field
+    reference the Lucene backend doesn't support) are logged and skipped, not
+    silently dropped — see the `helk-sigma-convert` container's own stdout for
+    the full skip list. Result: 2309 Sigma rules converted, 94 skipped
+    (out-of-scope services HELK doesn't ingest, plus 1 genuine conversion
+    error), against the pinned `r2026-07-01` tag.
+  - The 23 curated `helk_*.yml` rules carried over unchanged (verified against
+    ElastAlert2's rule schema; fixed one inconsistent index pattern —
+    `logs-endpoint-winevent-security*` → `-security-*` — found during review).
+  - Found and fixed a real conflict during boot testing: HELK's legacy
+    `01-helk-elastalert-status.json` Elasticsearch `_template` pre-declared a
+    `match_body` object mapping (implicitly `enabled: true`) for
+    `elastalert_status*` indices, which collided with ElastAlert2's own
+    official mapping (`match_body: {enabled: false}` — alert bodies are stored
+    but not indexed, by design) and made `elastalert-create-index` fail with a
+    500 on every start. Deleted the legacy template (its only custom fields,
+    `z_logstash_pipeline`/`etl_pipeline`, were unreferenced anywhere else in
+    the pipeline) rather than trying to reconcile two mapping authorities for
+    the same index.
+  - Verified end-to-end on the local Docker Desktop stack, including a full
+    `docker compose --profile alert down -v && up -d --build` clean-slate
+    rebuild (confirming the template fix persists on a fresh deploy, not just
+    the live cluster it was patched on): `elastalert_status`
+    (+ `_status`/`_silence`/`_error`/`_past`) indices create with no error, all
+    2332 rules (23 curated + 2309 Sigma-derived) load and query, and a seeded
+    test Sysmon document matching the curated `helk_sysmon_bits.yml` rule
+    produced a real alert (`1 query hits, 1 matches, 1 alerts sent`) within
+    one query cycle.
 - **Phase 3** — analytics: Spark 3.5.8/GraphFrames 0.12.1 + rebuilt Jupyter
   image, as the `notebook` Compose profile; verification pass scoped per
   the decision in §4.2. Not started.
@@ -343,4 +399,4 @@ WSL2 backend).
   assumptions from the pre-Phase-1 design.
 
 All four open decisions in §5 remain unresolved and were deliberately not
-touched during Phase 0/1.
+touched during Phase 0/1/2 — none of them gate alerting, only Phases 3/4.

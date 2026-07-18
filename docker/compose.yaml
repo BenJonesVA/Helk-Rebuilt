@@ -2,9 +2,10 @@ name: helk
 
 # Single consolidated compose file for the core stack (replaces the old four
 # near-duplicate helk-kibana-*.yml "build option" files). Compose `profiles`
-# (alert, notebook) are the intended home for ElastAlert2/Sigma (Phase 2) and
-# Spark+Jupyter (Phase 3) once those services are rebuilt — not added yet since
-# neither exists in this repo's current build.
+# make optional components opt-in: `alert` (Phase 2 — ElastAlert2 + Sigma-
+# derived detections, `docker compose --profile alert up -d --build`) is wired
+# up below. `notebook` (Phase 3 — Spark+Jupyter) is not added yet since that
+# service doesn't exist in this repo's current build.
 
 services:
   helk-elasticsearch:
@@ -215,6 +216,51 @@ services:
     networks:
       helk:
 
+  helk-sigma-convert:
+    build:
+      context: ./helk-sigma-convert
+      args:
+        SIGMA_RULES_REF: ${SIGMA_RULES_REF}
+    image: helk-sigma-convert:${SIGMA_RULES_REF}
+    container_name: helk-sigma-convert
+    profiles: ["alert"]
+    volumes:
+      - elastalert-sigma-rules:/output
+    environment:
+      - SIGMA_OUTPUT_DIR=/output
+    networks:
+      helk:
+
+  helk-elastalert:
+    build: ./helk-elastalert
+    image: helk-elastalert:2.30.0
+    container_name: helk-elastalert
+    profiles: ["alert"]
+    logging:
+      driver: "json-file"
+      options:
+        max-file: "9"
+        max-size: "6m"
+    volumes:
+      - elastalert-sigma-rules:/etc/elastalert/rules/sigma
+    environment:
+      - ES_HOST=helk-elasticsearch
+      - ES_PORT=9200
+      - ES_USERNAME=elastic
+      - ES_PASSWORD=${ELASTIC_PASSWORD}
+      - ES_USE_SSL=false
+      - SLACK_WEBHOOK_URL=${SLACK_WEBHOOK_URL}
+    restart: always
+    depends_on:
+      helk-elasticsearch:
+        condition: service_healthy
+      helk-elasticsearch-setup:
+        condition: service_completed_successfully
+      helk-sigma-convert:
+        condition: service_completed_successfully
+    networks:
+      helk:
+
   helk-nginx:
     build: ./helk-nginx
     image: helk-nginx:1.30-alpine
@@ -250,4 +296,6 @@ volumes:
   nginx-certs:
     driver: local
   nginx-private:
+    driver: local
+  elastalert-sigma-rules:
     driver: local

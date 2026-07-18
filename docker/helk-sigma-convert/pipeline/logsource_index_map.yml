@@ -1,0 +1,27 @@
+# Sigma logsource (product=windows, service=X) -> HELK Elasticsearch index
+# pattern. Cross-checked against docker/helk-logstash/pipeline's actual
+# [@metadata][index_name] output values (see 1531/1532/1533/1534/2511-*.conf).
+#
+# Rules that use Sigma's "category" field instead (process_creation,
+# registry_event, network_connection, image_load, etc.) are, throughout the
+# current SigmaHQ/sigma windows/ tree, uniformly Sysmon-sourced - so
+# convert_rules.py's resolve_index() routes any category-based rule straight
+# to sysmon_category_index below without needing one entry per category.
+windows:
+  index: "logs-endpoint-winevent-*"
+windows/security:
+  index: "logs-endpoint-winevent-security-*"
+windows/sysmon:
+  index: "logs-endpoint-winevent-sysmon-*"
+windows/system:
+  index: "logs-endpoint-winevent-system-*"
+windows/application:
+  index: "logs-endpoint-winevent-application-*"
+windows/wmi:
+  index: "logs-endpoint-winevent-wmiactivity-*"
+windows/powershell:
+  index: "logs-endpoint-winevent-powershell-*"
+windows/powershell-classic:
+  index: "logs-endpoint-winevent-powershell-*"
+
+sysmon_category_index: "logs-endpoint-winevent-sysmon-*"
