@@ -282,17 +282,18 @@ way worth calling out explicitly rather than discovering later.
    visualizations are still wanted before investing in either the staged
    7.17→8.19→9.4 migration or selective Lens rebuilds — some may be stale
    2021-era demo content not worth carrying forward at all.
-4. **How far to take the install/lifecycle scripts.** `helk_install.sh` /
-   `helk_update.sh` / `helk_remove_containers.sh` target Linux server
-   deployment (root, systemd, apt/yum) — separate from whether we ever run
-   this locally via Docker Desktop. Worth deciding whether to keep
-   supporting bare-metal/VM Linux installs at all, or to focus modernization
-   effort on the Compose files themselves and treat the shell scripts as
-   secondary.
+4. **How far to take the install/lifecycle scripts — resolved 2026-07-17.**
+   Drop bare-metal/VM Linux provisioning entirely (root check, apt/yum,
+   systemd, sysctl tuning, firewalld, installing Docker itself) rather than
+   porting it to Compose v2. `helk_install.sh` / `helk_update.sh` /
+   `helk_remove_containers.sh` are now thin wrappers assuming Docker +
+   Compose v2 are already present; `helk_docker_install.sh` and
+   `helk_setup_firewall.sh` were deleted. See the Phase 4 entry in §6 for
+   the full reasoning and the two named bugs (`git clean -d -fx`, the
+   hardcoded `master`-branch git-ref read) fixed along the way.
 
-Decisions #3 and #4 remain unresolved and gate Phase 4 only (lifecycle
-scripts) and any future Kibana-content work — neither gates anything already
-built in Phases 0-3.
+Decision #3 remains unresolved and does not gate any phase in this plan —
+it only affects future Kibana-content work.
 
 ---
 
@@ -573,13 +574,95 @@ WSL2 backend).
     meaningfully, not just synthetic test documents. This is a materially
     larger effort than Phase 3 itself, consistent with §5's original framing
     of it as "arguably its own project."
-- **Phase 4** — lifecycle scripts: modernize for Compose v2, fix the
-  destructive `git clean -d -fx` in `helk_update.sh`, fix the fragile
-  relative-path git-ref read, scoped per the decision in §5.4. Not started —
-  `helk_install.sh`/`helk_update.sh`/`helk_remove_containers.sh` still
-  reference the deleted legacy compose files and Zookeeper/`ADVERTISED_LISTENER`
-  assumptions from the pre-Phase-1 design.
+- **Phase 4 — done.** Resolved §5 decision #4 first (see below), then
+  rewrote all three lifecycle scripts as thin wrappers over the single
+  `compose.yaml`, and deleted the two scripts that only existed to serve
+  the dropped bare-metal path.
+  - **§5 decision #4, resolved 2026-07-17: drop bare-metal provisioning.**
+    User chose to stop supporting root/apt/yum/systemd/sysctl/firewalld
+    Linux-server installs and focus modernization on the Compose files
+    themselves, over porting that provisioning to Compose v2. This was also
+    the only branch verifiable in this environment — Docker Desktop/Windows
+    can't exercise `apt`, `systemctl`, `sysctl`, `/proc/meminfo`, or
+    `firewalld`, so a ported bare-metal installer would have shipped without
+    the boot-test verification every prior phase had.
+  - `helk_install.sh`, `helk_update.sh`, `helk_remove_containers.sh` were
+    rewritten from scratch rather than patched — patching would have meant
+    keeping the `$EUID -ne 0` root gate, the `helk-kibana-*-basic.yml`
+    build-choice menu (those files don't exist; there's one `compose.yaml`
+    with `alert`/`notebook` profiles), `install_htpasswd` (dropped in Phase
+    1), and the `docker-compose` v1 binary calls, none of which apply to the
+    current design.
+  - `helk_docker_install.sh` (installed Docker itself) and
+    `helk_setup_firewall.sh` (CentOS/firewalld only) were deleted outright —
+    both were pure bare-metal provisioning with no equivalent in the
+    Compose-v2-wrapper design.
+  - All three surviving scripts now: `cd` to their own directory via
+    `dirname "${BASH_SOURCE[0]}"` (fixing the fragile relative-path reads —
+    `../.git/refs/heads/master` in the old `helk_install.sh`, and the
+    `../configs/firewalld/helk.xml` copy in the deleted firewall script,
+    both of which assumed a specific invocation cwd); accept repeatable
+    `--profile <name>` flags matching `docker compose`'s own flag, instead
+    of a numbered 1-4 build menu; and require the Compose v2 plugin
+    (`docker compose version`) rather than a pinned `docker-compose` v1.27.4
+    binary (the original pin was to dodge a glibc issue in 1.28 that is long
+    since irrelevant — v1 itself is EOL).
+  - `helk_install.sh`: on a missing `.env`, copies `.env.example` and exits
+    asking the user to fill in real secrets rather than prompting
+    interactively for a Kibana password with a 90-second timeout-then-default
+    (as the old script did) — matches the `.env`-based config model from
+    Phase 1 instead of layering a second, script-driven credential flow on
+    top of it. Warns (but doesn't block) if `.env` still has `changeme_*`
+    placeholders. Boots via `docker compose --profile ... up -d --build`,
+    waits for Logstash's "Restored connection to ES instance" log line (kept
+    from the original — still a real, useful signal), and prints a final
+    summary with the actual reachable URLs (Kibana via Nginx TLS and via its
+    direct port mapping, Spark Master UI and Jupyter's URL/token when
+    `notebook` is active) — no more Zookeeper/KSQL lines, both gone since
+    Phase 1.
+  - `helk_update.sh`: the two real bugs named in §2.2/§5.4 are both fixed.
+    (1) The destructive `git clean -d -fx .` — which silently deletes every
+    untracked file as part of a routine "update" — is gone; the script now
+    runs `git status --porcelain` first and refuses to touch anything if the
+    tree isn't clean, printing exactly what's dirty and telling the user to
+    handle it themselves. (2) The hardcoded `../.git/refs/heads/master` read
+    (also doubly wrong here since this repo's branch is `main`, not
+    `master`) is replaced with `git rev-parse --abbrev-ref HEAD` and
+    `git config branch.<name>.remote`, so it works on whatever branch/remote
+    the clone actually has — also fixing the old script's habit of adding a
+    hardcoded remote pointing at the upstream `Cyb3rWard0g/HELK.git`, which
+    is wrong for a fork (verified this clone's `origin` already points at
+    the user's own fork). Pulls fast-forward-only (`git pull --ff-only`) and
+    refuses if the branch has diverged, rather than the old script's
+    unconditional `git pull`.
+  - `helk_remove_containers.sh`: the old version made the user type back one
+    of four legacy compose filenames from memory, then force-removed any
+    local image matching a broad grep across
+    `otrf|cyb3rward0g|helk|logstash|kibana|elasticsearch|cp-ksql` — a
+    pattern that could just as easily match an unrelated image on the same
+    Docker host. Replaced with `docker compose down`, scoped to this
+    project's own containers by construction; `--volumes` and `--images` are
+    separate, explicit, confirmed-by-default flags rather than always-on
+    behavior.
+  - Verification: `bash -n` on all three (clean); ran `--help` and an
+    unknown-flag case on each to confirm argument parsing and usage text;
+    exercised the missing-`.env` bootstrap path in an isolated copy of the
+    repo (confirms it copies `.env.example` and exits without proceeding);
+    ran `helk_update.sh` against this actual repo mid-Phase-4 (with real
+    uncommitted changes on disk) and confirmed it correctly found the repo
+    root, detected the dirty tree, printed the exact files involved, and
+    exited without touching anything — the safety check the whole rewrite
+    was centered on. Did **not** run a live `helk_install.sh`/
+    `helk_remove_containers.sh` end-to-end boot, since that would just
+    re-exercise the same `docker compose up`/`down` paths already verified
+    directly in Phases 1-3; the wrapper logic itself (flag parsing, `.env`
+    handling, the git safety check) is what's new here and what got tested.
+  - `docs/installation.md` was rewritten to match: Docker+Compose v2 as a
+    prerequisite instead of something the script installs, `.env`-based
+    configuration, the `--profile` flag convention, and the actual
+    URLs/ports this stack exposes (no more Zookeeper/KSQL references).
 
-§5 decisions #1 (Jupyter auth) and #2 (notebook verification depth) were
-resolved during Phase 3 (see above). Decisions #3 (Kibana saved objects) and
-#4 (lifecycle scripts) remain open and gate Phase 4 only.
+§5 decisions #1 (Jupyter auth), #2 (notebook verification depth), and #4
+(lifecycle script scope) were all resolved during Phases 3-4 (see above).
+Decision #3 (Kibana saved objects) remains open and does not gate any phase
+in this plan — it's unscheduled future work.

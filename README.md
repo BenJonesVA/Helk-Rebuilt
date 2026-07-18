@@ -3,7 +3,7 @@
 [![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](https://www.gnu.org/licenses/gpl-3.0)
 [![stability-wip](https://img.shields.io/badge/stability-work--in--progress-orange.svg)](https://github.com/mkenney/software-guides/blob/master/STABILITY-BADGES.md#work-in-progress)
 [![Fork of HELK](https://img.shields.io/badge/fork%20of-Cyb3rWard0g%2FHELK-blueviolet.svg)](https://github.com/Cyb3rWard0g/HELK)
-[![Progress](https://img.shields.io/badge/progress-~85%25%20(Phase%203%20of%204)-yellow.svg)](#status-work-in-progress-~85-complete)
+[![Progress](https://img.shields.io/badge/progress-100%25%20(Phase%204%20of%204)-brightgreen.svg)](#status-work-in-progress-100-complete)
 
 **HELK Rebuilt** is a from-scratch modernization of **HELK (The Hunting
 ELK)** — one of the first open source hunt platforms to combine SQL
@@ -21,13 +21,14 @@ ECS/OSSEM/ATT&CK-enriched detection content, and Spark/GraphFrames-based
 graph hunting in Jupyter — and rebuilds the infrastructure underneath it on
 currently maintained software.
 
-## Status: Work In Progress (~85% complete)
+## Status: Work In Progress (100% complete)
 
-🚧 **This project is a work in progress.** The core stack, alerting, and
-analytics all boot clean on currently maintained software; only
-lifecycle-script modernization is not started. Full technical detail —
-inventory, version decisions, open questions — lives in
-**[MODERNIZATION.md](MODERNIZATION.md)**.
+🚧 **This project is a work in progress**, though all four planned phases
+are now done: the core stack, alerting, analytics, and lifecycle scripts all
+run on currently maintained software. One decision (carrying forward
+Kibana's legacy saved objects) is deliberately unscheduled future work, not
+part of the phased plan. Full technical detail — inventory, version
+decisions, open questions — lives in **[MODERNIZATION.md](MODERNIZATION.md)**.
 
 Progress by phase (percentage is phase count, not effort-weighted — Phases 1,
 2, and 3 were the largest chunks of work):
@@ -38,7 +39,7 @@ Progress by phase (percentage is phase count, not effort-weighted — Phases 1,
 | 1 — Core bootable stack | Elasticsearch 9.4.3, Kibana 9.4.3, Logstash 9.4.3, Kafka 4.3.1 (KRaft, no Zookeeper), Nginx (TLS), consolidated into one `compose.yaml`. Verified with a clean `docker compose down -v && up --build`: all services healthy, Kibana reachable through Nginx over HTTPS, all 5 Kafka topics created, Logstash's pipelines run error-free. Along the way, converted ~22 of HELK's legacy Elasticsearch index templates to composable templates after finding they collided with Elastic's built-in `logs-*-*` reserved template namespace on 9.x. | ✅ Done |
 | 2 — Alerting | ElastAlert2 2.30.0 + a new `sigma-cli`/`pySigma-backend-elasticsearch` pipeline replacing the dead Sigma fork, gated behind the `alert` Compose profile. Converts 2,309 current SigmaHQ/sigma Windows rules to ElastAlert2 rules via a custom pySigma field-mapping pipeline ported from the legacy OSSEM config, plus the 23 curated `helk_*` rules. Verified with a clean `docker compose --profile alert down -v && up --build`: all 2,332 rules load, and a seeded test event produced a real fired alert end-to-end. | ✅ Done |
 | 3 — Analytics | Spark 4.1.2 (Scala 2.13) standalone cluster + GraphFrames 0.12.1 + a rebuilt Jupyter image, gated behind the `notebook` Compose profile. Verified with a clean `docker compose --profile notebook down -v && up --build`: worker registers with master, PySpark imports on both driver and executors, GraphFrames' core graph algorithms run correctly on the real distributed cluster, the Postgres-backed Hive metastore provisions and persists, and Jupyter is reachable through Nginx with token auth. | ✅ Done |
-| 4 — Lifecycle scripts | Modernize `helk_install.sh`/`helk_update.sh`/`helk_remove_containers.sh` for Compose v2, fix the destructive `git clean -d -fx`, fix fragile relative-path git-ref read | ⬜ Not started |
+| 4 — Lifecycle scripts | Rewrote `helk_install.sh`/`helk_update.sh`/`helk_remove_containers.sh` as thin `docker compose` wrappers (no more bare-metal OS/Docker provisioning — see the scope note below), fixed the destructive `git clean -d -fx` and the hardcoded `../.git/refs/heads/master` read, dropped the obsolete `helk_docker_install.sh`/`helk_setup_firewall.sh`. | ✅ Done |
 
 Confirmed design choice from Phase 1: Elasticsearch runs with authentication
 on but TLS disabled between containers on the internal Docker network (TLS
@@ -72,11 +73,24 @@ See [MODERNIZATION.md §6](MODERNIZATION.md#6-proposed-phased-sequencing) for
 the full spot-check findings and exactly what that future pass would need to
 do.
 
-Two scope decisions in [MODERNIZATION.md §5](MODERNIZATION.md#5-open-decisions)
-remain unresolved and gate Phase 4 only: whether to carry forward Kibana's
-~85 legacy saved objects, and how far to modernize the install/lifecycle
-scripts. (The two decisions that gated Phase 3 — Jupyter path auth and
-notebook verification depth — were resolved during Phase 3; see above.)
+Scope note from Phase 4: per an explicit user decision, the lifecycle
+scripts dropped bare-metal Linux provisioning entirely (root checks,
+apt/yum, systemd, sysctl tuning, firewalld, htpasswd, installing Docker
+itself) rather than porting that provisioning to Compose v2. The three
+scripts now assume Docker + the Compose v2 plugin are already present and
+are thin wrappers over the single `compose.yaml` — this was also the only
+branch that could actually be exercised here, since this environment can't
+run apt/systemd/firewalld. See
+[MODERNIZATION.md §6](MODERNIZATION.md#6-proposed-phased-sequencing) for the
+full reasoning and the two named bugs fixed along the way (the destructive
+`git clean -d -fx` and the hardcoded `master`-branch git-ref read).
+
+One scope decision in [MODERNIZATION.md §5](MODERNIZATION.md#5-open-decisions)
+remains open, and it does not gate any phase in the plan above: whether to
+carry forward Kibana's ~85 legacy saved objects, or treat them as stale
+2021-era demo content not worth migrating. (The decisions that gated Phases
+3 and 4 — Jupyter path auth, notebook verification depth, and lifecycle
+script scope — were all resolved during those phases; see above.)
 
 ## Goals
 
